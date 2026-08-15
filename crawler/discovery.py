@@ -43,7 +43,7 @@ def _organic(key,q,country,limit=5):
 
 
 def _resolve_direct(key,row,query,country):
-    """Resolve Google Shopping intermediary links to a real merchant page when possible."""
+    """Resolve Google Shopping intermediary links to a verified merchant page."""
     link=row.get("link") or ""
     if link and not _is_google(link):
         return link
@@ -54,29 +54,21 @@ def _resolve_direct(key,row,query,country):
         return link
 
     searches=[]
-    if query:
-        searches.append(f'site:{domain} "{query[:120]}"')
-    if title:
-        searches.append(f'site:{domain} "{title[:120]}"')
-    if query and title:
-        searches.append(f"site:{domain} {query[:90]} {title[:90]}")
+    if query:searches.append(f'site:{domain} "{query[:120]}"')
+    if title:searches.append(f'site:{domain} "{title[:120]}"')
+    if query and title:searches.append(f"site:{domain} {query[:90]} {title[:90]}")
 
-    best=None
-    best_score=-1.0
+    best=None;best_score=-1.0
     for search_q in searches:
         try:
             for item in _organic(key,search_q,country,5):
-                u=item.get("link") or ""
-                host=urlparse(u).netloc.lower()
-                if not (host==domain or host.endswith("."+domain)):
-                    continue
+                u=item.get("link") or "";host=urlparse(u).netloc.lower()
+                if not (host==domain or host.endswith("."+domain)):continue
                 candidate_title=item.get("title") or title
                 result=evaluate_match(query,candidate_title) if query else None
-                score=result.score if result and result.accepted else 0.0
-                if score>best_score:
-                    best=u;best_score=score
-                if result and result.accepted and result.score>=80:
-                    return u
+                if result and result.accepted and result.score>best_score:
+                    best=u;best_score=result.score
+                if result and result.accepted and result.score>=80:return u
         except Exception:
             continue
     return best or link
@@ -84,24 +76,17 @@ def _resolve_direct(key,row,query,country):
 
 def discover(query,country="sa",limit=10):
     key=os.getenv("SERPER_API_KEY")
-    if not key:
-        raise RuntimeError("SERPER_API_KEY is required for discovery mode")
+    if not key:raise RuntimeError("SERPER_API_KEY is required for discovery mode")
 
-    attempts=[
-        f"{query} Saudi Arabia buy price",
-        f"{query} Saudi Arabia",
-        f"{query} KSA",
-    ]
+    attempts=[f"{query} Saudi Arabia buy price",f"{query} Saudi Arabia",f"{query} KSA"]
     raw=[]
     for q in attempts:
         raw=_shopping(key,q,country,limit)
-        if raw:
-            break
+        if raw:break
 
     rows=[]
     for i,x in enumerate(raw):
         original=x.get("link") or ""
-        # Resolve the most useful dashboard offers while keeping API consumption bounded.
         link=_resolve_direct(key,x,query,country) if i<8 else original
         host=urlparse(link).netloc.lower()
         rows.append({
