@@ -1,9 +1,9 @@
 from __future__ import annotations
-import os, statistics, smtplib
+import os, statistics, smtplib, re
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from urllib.parse import urlparse
-from crawler.adapters import fetch_quote
+from crawler.adapters import fetch_quote, ProductQuote
 from crawler.backend import SupabaseStore
 from crawler.discovery import discover
 
@@ -15,6 +15,34 @@ def deal_status(current,base,threshold_pct,target_price=None):
     pct=((base-current)/base*100) if base else 0.0
     return (bool(base and current <= base*(1-float(threshold_pct)/100)) or
             bool(target_price is not None and current <= float(target_price))), round(pct,2)
+
+def _price_number(value):
+    if value is None: return None
+    if isinstance(value,(int,float)): return float(value)
+    text=str(value).replace(",","")
+    m=re.search(r"([0-9]+(?:\.[0-9]+)?)",text)
+    return float(m.group(1)) if m else None
+
+def _is_direct_merchant_url(url):
+    host=urlparse(url or "").netloc.lower()
+    return bool(host) and not (host=="google.com" or host.endswith(".google.com") or host=="www.google.com")
+
+def _serper_quotes(rows):
+    quotes=[]
+    for x in rows:
+        price=_price_number(x.get("price"))
+        if not price: continue
+        source=(x.get("source") or "Google Shopping").strip()
+        quotes.append(ProductQuote(
+            retailer=source,
+            title=x.get("title") or source,
+            price=price,
+            currency="SAR",
+            in_stock=True,
+            url=x.get("url") or "",
+            source="serper-shopping",
+        ))
+    return quotes
 
 def send_email(subject,body):
     host=os.getenv("SMTP_HOST"); user=os.getenv("SMTP_USER"); password=os.getenv("SMTP_PASSWORD")
@@ -39,18 +67,22 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
         tid=t["id"]
         try:
             urls=t.get("urls") or ([t["url"]] if t.get("url") else [])
+            discovery_rows=[]
+            discovery_quotes=[]
             if not urls:
-                rows=discoverer(t["name"],country="sa",limit=10)
-                supported=[x.get("url") for x in rows if x.get("supported") and x.get("url")]
-                fallback=[x.get("url") for x in rows if x.get("url")]
-                urls=(supported or fallback)[:5]
-                print(f"tracker={t.get('name','')} discovery_results={len(rows)} selected_urls={len(urls)}")
-                store.update_sources(tid,urls)
-                if not urls:
-                    store.mark_checked(tid,"needs_url","Serper discovery returned no product URLs"); continue
+                discovery_rows=discoverer(t["name"],country="sa",limit=10)
+                direct=[x.get("url") for x in discovery_rows if x.get("url") and _is_direct_merchant_url(x.get("url"))]
+                supported=[x.get("url") for x in discovery_rows if x.get("supported") and x.get("url") and _is_direct_merchant_url(x.get("url"))]
+                urls=(supported or direct)[:5]
+                discovery_quotes=_serper_quotes(discovery_rows)
+                print(f"tracker={t.get('name','')} discovery_results={len(discovery_rows)} direct_urls={len(urls)} serper_quotes={len(discovery_quotes)}")
+                if urls:
+                    store.update_sources(tid,urls)
+                if not urls and not discovery_quotes:
+                    store.mark_checked(tid,"needs_url","Serper discovery returned no usable product URLs or prices"); continue
             previous=store.observations(tid,30)
             prior=[float(x["delivered_price"]) for x in reversed(previous) if x.get("delivered_price") is not None]
-            quotes=[]
+            quotes=list(discovery_quotes)
             quote_errors=[]
             for url in urls:
                 try: quotes.append(quote_fetcher(url))
@@ -67,7 +99,7 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
                  "baseline":base,"discount_pct":discount,"is_deal":is_deal,
                  "checked_at":datetime.now(timezone.utc).isoformat(),"source":quote.source}
             store.insert_observation(row); store.mark_checked(tid,"ok",None); checked+=1
-            print(f"tracker={t.get('name','')} retailer={quote.retailer} price={quote.delivered_price} status=ok")
+            print(f"tracker={t.get('name','')} retailer={quote.retailer} price={quote.delivered_price} source={quote.source} status=ok")
             if is_deal: alerts.append(row)
         except Exception as e:
             print(f"tracker={t.get('name','')} status=error error={str(e)[:300]}")
