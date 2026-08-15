@@ -1,0 +1,4 @@
+[
+  {"name":"Nike Air Max 90","country":"SA","currency":"SAR","threshold":15,"targetPrice":500,"url":"https://example.com/nike-air-max-90"},
+  {"name":"Sony WH-1000XM6","country":"SA","currency":"SAR","threshold":12,"targetPrice":1250,"url":"https://example.com/sony-wh-1000xm6"}
+]
