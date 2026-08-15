@@ -33,13 +33,14 @@ serve(async (req) => {
       return response(req, 403, { error: "Origin not allowed" });
     }
 
-    // This function is intentionally callable by the public dashboard, so deploy it
-    // with --no-verify-jwt and validate the project's public anon key here instead.
-    // The anon key is not a secret; this check prevents accidental unauthenticated calls.
-    const suppliedApiKey = req.headers.get("apikey") || "";
-    const expectedAnonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
-    if (!expectedAnonKey || suppliedApiKey !== expectedAnonKey) {
-      return response(req, 401, { error: "Invalid Supabase anon key" });
+    // This function is intentionally callable from the public GitHub Pages dashboard.
+    // Deploy with --no-verify-jwt. We do not compare the public anon key byte-for-byte:
+    // Supabase projects may expose different public-key representations across CLI/runtime
+    // generations, and the anon key is not a secret. Security here comes from the allowed
+    // origin, validating an existing active queued tracker via service role, and keeping the
+    // GitHub workflow token server-side.
+    if (!req.headers.get("apikey")) {
+      return response(req, 401, { error: "Missing Supabase API key" });
     }
 
     const { tracker_id } = await req.json();
@@ -47,8 +48,6 @@ serve(async (req) => {
       return response(req, 400, { error: "A valid tracker_id UUID is required" });
     }
 
-    // Only allow an instant run for an active tracker that is still waiting for its
-    // first crawl. This prevents repeated browser clicks from endlessly dispatching CI.
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     if (!supabaseUrl || !serviceKey) {
