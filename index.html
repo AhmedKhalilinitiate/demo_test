@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Price Intelligence Watcher</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Price Intelligence MVP</p>
+        <h1>Track items across countries and get alerted when the delivered price drops.</h1>
+        <p class="sub">Add a product, choose delivery country, set your threshold, and let the scheduled crawler collect prices 3 times per day.</p>
+      </div>
+      <div class="hero-card">
+        <span class="pulse"></span>
+        <strong id="dealCount">0</strong>
+        <small>active deal alerts</small>
+      </div>
+    </section>
+
+    <section class="panel tracker-form">
+      <h2>Create tracker</h2>
+      <div class="grid">
+        <label>Item name
+          <input id="itemName" placeholder="Example: Nike Air Max 90" />
+        </label>
+        <label>Product URL, optional
+          <input id="itemUrl" placeholder="https://store.com/product" />
+        </label>
+        <label>Deliver to
+          <select id="country">
+            <option value="SA">Saudi Arabia</option>
+            <option value="AE">United Arab Emirates</option>
+            <option value="US">United States</option>
+            <option value="GB">United Kingdom</option>
+            <option value="DE">Germany</option>
+          </select>
+        </label>
+        <label>Currency
+          <select id="currency">
+            <option value="SAR">SAR</option>
+            <option value="AED">AED</option>
+            <option value="USD">USD</option>
+            <option value="GBP">GBP</option>
+            <option value="EUR">EUR</option>
+          </select>
+        </label>
+        <label>Alert when below baseline by %
+          <input id="threshold" type="number" min="1" max="90" value="15" />
+        </label>
+        <label>Target price, optional
+          <input id="targetPrice" type="number" min="0" placeholder="Example: 500" />
+        </label>
+      </div>
+      <button id="addTracker">Start tracking</button>
+    </section>
+
+    <section class="stats">
+      <div><strong id="trackedCount">0</strong><span>tracked items</span></div>
+      <div><strong id="avgDiscount">0%</strong><span>best discount</span></div>
+      <div><strong>3×</strong><span>daily checks</span></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Tracked products</h2>
+        <button id="demoData" class="secondary">Load demo data</button>
+      </div>
+      <div id="trackerList" class="cards"></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
