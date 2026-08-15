@@ -29,9 +29,9 @@ def _price_number(value):
         return float(value) if float(value)>0 else None
     text=str(value).strip()
     text=text.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩٫٬","0123456789.,"))
-    text=re.sub(r"[^0-9.,]","",text)
-    if not text:return None
-    # Handle both 1,299.00 and 1.299,00 style formatting.
+    m=re.search(r"\d[\d.,]*",text)
+    if not m:return None
+    text=m.group(0).rstrip(".,")
     if "," in text and "." in text:
         if text.rfind(",")>text.rfind("."):
             text=text.replace(".","").replace(",",".")
@@ -82,11 +82,7 @@ def _filter_fetched_quotes(query,quotes):
 
 
 def _drop_price_outliers(quotes):
-    """Protect the 'best price' from obvious accessory/parse outliers.
-
-    This is intentionally conservative: it only activates with four or more relevant
-    offers and keeps the full set if filtering would leave too little evidence.
-    """
+    """Protect the best-price decision from obvious accessory/parse outliers."""
     if len(quotes)<4:return quotes,0
     vals=[float(q.delivered_price) for q in quotes if q.delivered_price>0]
     if len(vals)<4:return quotes,0
@@ -111,7 +107,6 @@ def _offer_rows(tracker_id,quotes,checked_at):
             "delivered_price":q.delivered_price,"currency":q.currency or "SAR",
             "in_stock":q.in_stock,"source":q.source,"checked_at":checked_at,
         })
-    # Prefer actionable direct merchant pages first, then unresolved marketplace quotes.
     out.sort(key=lambda r:(0 if r["url"] else 1,float(r["delivered_price"])))
     return out[:20]
 
