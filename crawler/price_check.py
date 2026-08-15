@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from crawler.adapters import fetch_quote
 from crawler.backend import SupabaseStore
+from crawler.discovery import discover
 
 def baseline(prices):
     vals=[float(x) for x in prices if x is not None]
@@ -23,21 +24,27 @@ def send_email(subject,body):
         smtp.login(user,password); smtp.send_message(msg)
     return True
 
-def run(store=None,quote_fetcher=fetch_quote):
+def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
     store=store or SupabaseStore(); alerts=[]; checked=0
     for t in store.trackers():
         tid=t["id"]
         try:
             urls=t.get("urls") or ([t["url"]] if t.get("url") else [])
             if not urls:
-                store.mark_checked(tid,"needs_url","No product URL configured"); continue
+                rows=discoverer(t["name"],country="sa",limit=10)
+                supported=[x.get("url") for x in rows if x.get("supported") and x.get("url")]
+                fallback=[x.get("url") for x in rows if x.get("url")]
+                urls=(supported or fallback)[:5]
+                store.update_sources(tid,urls)
+                if not urls:
+                    store.mark_checked(tid,"needs_url","Serper discovery returned no product URLs"); continue
             previous=store.observations(tid,30)
             prior=[float(x["delivered_price"]) for x in reversed(previous) if x.get("delivered_price") is not None]
             quotes=[]
             for url in urls:
                 try: quotes.append(quote_fetcher(url))
                 except Exception: continue
-            if not quotes: raise RuntimeError("No configured source returned a valid price")
+            if not quotes: raise RuntimeError("Discovered/configured sources returned no valid price")
             quote=min(quotes,key=lambda q:q.delivered_price)
             base=baseline(prior) or quote.delivered_price
             is_deal,discount=deal_status(quote.delivered_price,base,t.get("threshold_pct",15),t.get("target_price"))
