@@ -2,6 +2,7 @@ from __future__ import annotations
 import os, statistics, smtplib
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from urllib.parse import urlparse
 from crawler.adapters import fetch_quote
 from crawler.backend import SupabaseStore
 from crawler.discovery import discover
@@ -26,7 +27,15 @@ def send_email(subject,body):
 
 def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
     store=store or SupabaseStore(); alerts=[]; checked=0
-    for t in store.trackers():
+    trackers=store.trackers()
+    try:
+        project_host=urlparse(store.url).netloc
+    except Exception:
+        project_host="unknown"
+    print(f"supabase_host={project_host} trackers_loaded={len(trackers)}")
+    if trackers:
+        print("tracker_names=" + " | ".join(str(t.get("name",""))[:80] for t in trackers))
+    for t in trackers:
         tid=t["id"]
         try:
             urls=t.get("urls") or ([t["url"]] if t.get("url") else [])
@@ -35,16 +44,20 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
                 supported=[x.get("url") for x in rows if x.get("supported") and x.get("url")]
                 fallback=[x.get("url") for x in rows if x.get("url")]
                 urls=(supported or fallback)[:5]
+                print(f"tracker={t.get('name','')} discovery_results={len(rows)} selected_urls={len(urls)}")
                 store.update_sources(tid,urls)
                 if not urls:
                     store.mark_checked(tid,"needs_url","Serper discovery returned no product URLs"); continue
             previous=store.observations(tid,30)
             prior=[float(x["delivered_price"]) for x in reversed(previous) if x.get("delivered_price") is not None]
             quotes=[]
+            quote_errors=[]
             for url in urls:
                 try: quotes.append(quote_fetcher(url))
-                except Exception: continue
-            if not quotes: raise RuntimeError("Discovered/configured sources returned no valid price")
+                except Exception as exc: quote_errors.append(str(exc)[:160])
+            if not quotes:
+                detail="; ".join(quote_errors[:3])
+                raise RuntimeError("Discovered/configured sources returned no valid price" + (f": {detail}" if detail else ""))
             quote=min(quotes,key=lambda q:q.delivered_price)
             base=baseline(prior) or quote.delivered_price
             is_deal,discount=deal_status(quote.delivered_price,base,t.get("threshold_pct",15),t.get("target_price"))
@@ -54,8 +67,10 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
                  "baseline":base,"discount_pct":discount,"is_deal":is_deal,
                  "checked_at":datetime.now(timezone.utc).isoformat(),"source":quote.source}
             store.insert_observation(row); store.mark_checked(tid,"ok",None); checked+=1
+            print(f"tracker={t.get('name','')} retailer={quote.retailer} price={quote.delivered_price} status=ok")
             if is_deal: alerts.append(row)
         except Exception as e:
+            print(f"tracker={t.get('name','')} status=error error={str(e)[:300]}")
             store.mark_checked(tid,"error",str(e)[:500])
     if alerts:
         body="\n".join(f"{a['title']} — {a['currency']} {a['delivered_price']:.2f} vs {a['baseline']:.2f} ({a['discount_pct']}%)\n{a['url']}" for a in alerts)
