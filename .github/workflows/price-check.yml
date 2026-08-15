@@ -10,6 +10,11 @@ on:
   schedule:
     - cron: "0 2,10,18 * * *"
   workflow_dispatch:
+    inputs:
+      tracker_id:
+        description: "Optional tracker UUID for an instant first crawl"
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
@@ -26,6 +31,7 @@ jobs:
       - name: Run live crawler
         run: python -m crawler.price_check
         env:
+          TRACKER_ID: ${{ github.event.inputs.tracker_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
