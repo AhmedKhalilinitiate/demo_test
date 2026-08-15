@@ -1,5 +1,5 @@
 from crawler.adapters import adapter_for, AmazonSA, Noon, Jarir, Extra, Namshi, BaseAdapter, ProductQuote
-from crawler.price_check import baseline, deal_status, _price_number, _drop_price_outliers, _should_alert
+from crawler.price_check import baseline, deal_status, _price_number, _drop_price_outliers, _should_alert, _serper_quotes
 from crawler.product_match import evaluate_match
 
 
@@ -63,3 +63,15 @@ def test_repeat_alert_suppression_and_stronger_deal_alert():
     assert _should_alert(True,previous,480)
     assert _should_alert(True,[{'is_deal':False,'delivered_price':600}],500)
     assert not _should_alert(False,previous,450)
+
+
+def test_polluted_old_history_does_not_skew_new_baseline():
+    assert baseline([259,580,590],585)==585
+
+
+def test_verified_merchant_resolution_can_confirm_variant_omitted_by_shopping_title():
+    rows=[{'title':'ASICS GEL-KAYANO 32 Running Shoe','price':'SAR 610','source':'Amazon','url':'https://amazon.sa/example','verified_direct':True}]
+    quotes,rejected=_serper_quotes(rows,'ASICS GEL KAYANO 32 wide')
+    assert len(quotes)==1
+    assert quotes[0].source=='serper-shopping-verified'
+    assert rejected==[]
