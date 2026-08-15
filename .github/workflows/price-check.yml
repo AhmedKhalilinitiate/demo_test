@@ -1,29 +1,28 @@
-name: Scheduled Price Checks
+name: Live price checks
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 5,13,21 * * *'
+    - cron: "0 2,10,18 * * *"
+  workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 jobs:
-  price-check:
+  crawl:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Run price checker
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+      - run: python -m crawler.price_check
         env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
-        run: python crawler/price_check.py
-      - name: Commit updated price history
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: Update scheduled price history
-          file_pattern: data/price_history.json
