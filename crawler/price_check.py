@@ -74,10 +74,8 @@ def _filter_fetched_quotes(query,quotes):
     accepted=[];rejected=[]
     for q in quotes:
         match=evaluate_match(query,q.title)
-        if match.accepted:
-            accepted.append(q)
-        else:
-            rejected.append((q.title,match.reason))
+        if match.accepted:accepted.append(q)
+        else:rejected.append((q.title,match.reason))
     return accepted,rejected
 
 
@@ -86,8 +84,7 @@ def _drop_price_outliers(quotes):
     if len(quotes)<4:return quotes,0
     vals=[float(q.delivered_price) for q in quotes if q.delivered_price>0]
     if len(vals)<4:return quotes,0
-    med=float(statistics.median(vals))
-    lo,hi=med*0.30,med*3.5
+    med=float(statistics.median(vals));lo,hi=med*0.30,med*3.5
     kept=[q for q in quotes if lo<=float(q.delivered_price)<=hi]
     if len(kept)<2:return quotes,0
     return kept,len(quotes)-len(kept)
@@ -133,6 +130,16 @@ def send_email(subject,body):
     return True
 
 
+def _unique_direct_urls(urls):
+    seen=set();out=[]
+    for u in urls:
+        if not u or not _is_direct_merchant_url(u):continue
+        key=u.split("#",1)[0]
+        if key in seen:continue
+        seen.add(key);out.append(u)
+    return out
+
+
 def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
     store=store or SupabaseStore();alerts=[];checked=0
     tracker_filter=os.getenv("TRACKER_ID") or None
@@ -145,23 +152,27 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
     for t in trackers:
         tid=t["id"];name=(t.get("name") or "").strip()
         try:
-            urls=t.get("urls") or ([t["url"]] if t.get("url") else [])
-            discovery_rows=[];discovery_quotes=[];rejected=[]
-            if not urls:
+            known_urls=t.get("urls") or ([t["url"]] if t.get("url") else [])
+            discovery_rows=[];discovery_quotes=[];rejected=[];discovery_error=None
+            try:
                 discovery_rows=discoverer(name,country="sa",limit=16)
-                direct=[x.get("url") for x in discovery_rows if x.get("url") and _is_direct_merchant_url(x.get("url"))]
-                supported=[x.get("url") for x in discovery_rows if x.get("supported") and x.get("url") and _is_direct_merchant_url(x.get("url"))]
-                urls=(supported or direct)[:6]
                 discovery_quotes,rejected=_serper_quotes(discovery_rows,name)
-                print(
-                    f"tracker={name} discovery_results={len(discovery_rows)} direct_urls={len(urls)} "
-                    f"relevant_serper={len(discovery_quotes)} rejected_serper={len(rejected)}"
-                )
-                if urls:store.update_sources(tid,urls)
-                if not urls and not discovery_quotes:
-                    detail=rejected[0][1] if rejected else "no shopping results"
-                    store.mark_checked(tid,"no_match",f"No sufficiently relevant product offers found ({detail})")
-                    continue
+            except Exception as exc:
+                discovery_error=str(exc)[:180]
+
+            discovered_urls=[x.get("url") for x in discovery_rows if x.get("url") and _is_direct_merchant_url(x.get("url"))]
+            supported_urls=[x.get("url") for x in discovery_rows if x.get("supported") and x.get("url") and _is_direct_merchant_url(x.get("url"))]
+            urls=_unique_direct_urls(list(known_urls)+(supported_urls or discovered_urls))[:8]
+            print(
+                f"tracker={name} discovery_results={len(discovery_rows)} direct_urls={len(urls)} "
+                f"relevant_serper={len(discovery_quotes)} rejected_serper={len(rejected)}"
+                + (f" discovery_error={discovery_error}" if discovery_error else "")
+            )
+
+            if not urls and not discovery_quotes:
+                detail=rejected[0][1] if rejected else (discovery_error or "no shopping results")
+                store.mark_checked(tid,"no_match",f"No sufficiently relevant product offers found ({detail})")
+                continue
 
             previous=store.observations(tid,30)
             prior=[float(x["delivered_price"]) for x in reversed(previous) if x.get("delivered_price") is not None]
