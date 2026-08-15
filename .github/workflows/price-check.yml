@@ -1,5 +1,12 @@
 name: Live price checks
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'crawler/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/workflows/price-check.yml'
   schedule:
     - cron: "0 2,10,18 * * *"
   workflow_dispatch:
