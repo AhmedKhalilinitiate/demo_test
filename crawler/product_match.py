@@ -14,29 +14,35 @@ CRITICAL_VARIANTS = {
     "men", "mens", "women", "womens", "kids", "kid", "junior",
 }
 
-WIDE_MARKERS = {"wide", "2e", "4e", "extra-wide", "extrawide"}
+WIDE_MARKERS = {"wide", "2e", "4e", "extrawide"}
 
 
 def _norm(text: str | None) -> str:
     s = (text or "").lower()
-    s = s.replace("’", "'").replace("–", "-").replace("—", "-")
-    s = re.sub(r"[^a-z0-9.+-]+", " ", s)
+    s = s.replace("’", "").replace("'", "").replace("–", "-").replace("—", "-")
+    s = re.sub(r"[-_/]+", " ", s)
+    s = re.sub(r"[^a-z0-9.+]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
 def tokens(text: str | None) -> list[str]:
-    return re.findall(r"[a-z]+(?:-[a-z]+)?|\d+(?:\.\d+)?", _norm(text))
+    return re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", _norm(text))
 
 
 def _numbers(ts: list[str]) -> set[str]:
     return {t for t in ts if re.fullmatch(r"\d+(?:\.\d+)?", t)}
 
 
+def _model_codes(ts: list[str]) -> set[str]:
+    return {
+        t for t in ts
+        if len(t) >= 3 and any(c.isdigit() for c in t) and any(c.isalpha() for c in t)
+        and t not in {"2e", "4e"}
+    }
+
+
 def _wide_present(ts: set[str]) -> bool:
-    if ts & WIDE_MARKERS:
-        return True
-    # Common footwear width notation sometimes appears as separate tokens.
-    return "2" in ts and "e" in ts or "4" in ts and "e" in ts
+    return bool(ts & WIDE_MARKERS) or ("extra" in ts and "wide" in ts)
 
 
 @dataclass(frozen=True)
@@ -49,8 +55,8 @@ class MatchResult:
 def evaluate_match(query: str, title: str | None) -> MatchResult:
     """Conservative product-title match for price comparison.
 
-    The goal is false-positive resistance: a wrong model/variant is more damaging to
-    price intelligence than temporarily having no quote.
+    False positives are intentionally more expensive than false negatives: a wrong
+    generation/edition/fit can create a fake deal and poison price history.
     """
     q = tokens(query)
     t = tokens(title)
@@ -59,20 +65,21 @@ def evaluate_match(query: str, title: str | None) -> MatchResult:
 
     qs, ts = set(q), set(t)
     qnums, tnums = _numbers(q), _numbers(t)
+    qcodes = _model_codes(q)
 
-    # Model/generation numbers in the requested product are mandatory.
     missing_nums = qnums - tnums
     if missing_nums:
         return MatchResult(False, 0.0, f"missing model number: {', '.join(sorted(missing_nums))}")
 
-    # Width is a purchase-critical footwear variant. Do not silently compare standard fit.
-    if "wide" in qs or "2e" in qs or "4e" in qs or "extra-wide" in qs or "extrawide" in qs:
-        if not _wide_present(ts):
-            return MatchResult(False, 0.0, "missing requested wide-fit variant")
+    missing_codes = qcodes - ts
+    if missing_codes:
+        return MatchResult(False, 0.0, f"missing model code: {', '.join(sorted(missing_codes))}")
 
-    # Explicit edition/gender/size-family variant words are mandatory when requested.
-    requested_variants = (qs & CRITICAL_VARIANTS)
-    # Normalize common apostrophe/plural gender spellings.
+    wants_wide = "wide" in qs or "2e" in qs or "4e" in qs or "extrawide" in qs
+    if wants_wide and not _wide_present(ts):
+        return MatchResult(False, 0.0, "missing requested wide-fit variant")
+
+    requested_variants = qs & CRITICAL_VARIANTS
     equivalence = {
         "men": {"men", "mens"}, "mens": {"men", "mens"},
         "women": {"women", "womens"}, "womens": {"women", "womens"},
@@ -84,15 +91,17 @@ def evaluate_match(query: str, title: str | None) -> MatchResult:
         if not (ts & allowed):
             return MatchResult(False, 0.0, f"missing requested variant: {v}")
 
-    qcore = [x for x in q if x not in STOPWORDS and x not in qnums and x not in WIDE_MARKERS]
+    qcore = [
+        x for x in q
+        if x not in STOPWORDS and x not in qnums and x not in qcodes
+        and x not in WIDE_MARKERS and x != "extra"
+    ]
     if not qcore:
         qcore = [x for x in q if x not in STOPWORDS]
     core_set = set(qcore)
     overlap = core_set & ts
     ratio = len(overlap) / max(1, len(core_set))
 
-    # Short specific queries should match all meaningful words. Longer product names
-    # can tolerate one descriptive token missing from a marketplace title.
     if len(core_set) <= 2:
         accepted = ratio >= 1.0
     elif len(core_set) <= 4:
@@ -103,11 +112,11 @@ def evaluate_match(query: str, title: str | None) -> MatchResult:
     if not accepted:
         return MatchResult(False, round(ratio * 100, 1), "insufficient title overlap")
 
-    # Prefer exact lexical coverage and direct model-number agreement.
-    score = ratio * 80.0
+    score = ratio * 76.0
     if qnums:
-        score += 12.0
-    if requested_variants or (qs & WIDE_MARKERS):
+        score += 10.0
+    if qcodes:
         score += 8.0
-    score = min(100.0, score)
-    return MatchResult(True, round(score, 1), "matched")
+    if requested_variants or wants_wide:
+        score += 6.0
+    return MatchResult(True, round(min(100.0, score), 1), "matched")
