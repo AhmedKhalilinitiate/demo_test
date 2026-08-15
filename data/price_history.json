@@ -1,0 +1,6 @@
+[
+  {"name":"Nike Air Max 90","country":"SA","currency":"SAR","price":699,"url":"https://example.com/nike-air-max-90","checked_at":"2026-08-01T08:00:00Z","baseline":699,"discount_pct":0},
+  {"name":"Nike Air Max 90","country":"SA","currency":"SAR","price":649,"url":"https://example.com/nike-air-max-90","checked_at":"2026-08-02T08:00:00Z","baseline":674,"discount_pct":3.7},
+  {"name":"Sony WH-1000XM6","country":"SA","currency":"SAR","price":1499,"url":"https://example.com/sony-wh-1000xm6","checked_at":"2026-08-01T08:00:00Z","baseline":1499,"discount_pct":0},
+  {"name":"Sony WH-1000XM6","country":"SA","currency":"SAR","price":1450,"url":"https://example.com/sony-wh-1000xm6","checked_at":"2026-08-02T08:00:00Z","baseline":1474.5,"discount_pct":1.66}
+]
