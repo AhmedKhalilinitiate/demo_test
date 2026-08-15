@@ -1,4 +1,4 @@
 window.PRICE_INTEL_CONFIG = {
-  supabaseUrl: "REPLACE_WITH_SUPABASE_URL",
-  supabaseAnonKey: "REPLACE_WITH_SUPABASE_ANON_KEY"
+  supabaseUrl: "https://nckhnwqsbtpghzbpeedk.supabase.co",
+  supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ja2hud3FzYnRwZ2h6YnBlZWRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY3OTIxMDcsImV4cCI6MjEwMjM2ODEwN30.q2fFU6XC46wOZG-g6lZQqCdQGtvjaiwaGs7rtOnGwL4"
 };
