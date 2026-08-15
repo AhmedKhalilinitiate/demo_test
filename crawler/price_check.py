@@ -70,12 +70,15 @@ def _serper_quotes(rows,query):
     return quotes,rejected
 
 
-def _filter_fetched_quotes(query,quotes):
+def _filter_fetched_quotes(query,quotes,trusted_urls=None):
+    trusted=set(trusted_urls or [])
     accepted=[];rejected=[]
     for q in quotes:
         match=evaluate_match(query,q.title)
-        if match.accepted:accepted.append(q)
-        else:rejected.append((q.title,match.reason))
+        if match.accepted or q.url in trusted:
+            accepted.append(q)
+        else:
+            rejected.append((q.title,match.reason))
     return accepted,rejected
 
 
@@ -163,9 +166,15 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
             discovered_urls=[x.get("url") for x in discovery_rows if x.get("url") and _is_direct_merchant_url(x.get("url"))]
             supported_urls=[x.get("url") for x in discovery_rows if x.get("supported") and x.get("url") and _is_direct_merchant_url(x.get("url"))]
             urls=_unique_direct_urls(list(known_urls)+(supported_urls or discovered_urls))[:8]
+            trusted_urls={
+                x.get("url") for x in discovery_rows
+                if x.get("url") and _is_direct_merchant_url(x.get("url"))
+                and x.get("shopping_url") and not _is_direct_merchant_url(x.get("shopping_url"))
+                and x.get("url")!=x.get("shopping_url")
+            }
             print(
                 f"tracker={name} discovery_results={len(discovery_rows)} direct_urls={len(urls)} "
-                f"relevant_serper={len(discovery_quotes)} rejected_serper={len(rejected)}"
+                f"trusted_resolved={len(trusted_urls)} relevant_serper={len(discovery_quotes)} rejected_serper={len(rejected)}"
                 + (f" discovery_error={discovery_error}" if discovery_error else "")
             )
 
@@ -181,7 +190,7 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
             for url in urls:
                 try:fetched.append(quote_fetcher(url))
                 except Exception as exc:quote_errors.append(str(exc)[:160])
-            fetched_ok,fetched_rejected=_filter_fetched_quotes(name,fetched)
+            fetched_ok,fetched_rejected=_filter_fetched_quotes(name,fetched,trusted_urls)
             quotes=list(discovery_quotes)+fetched_ok
             rejected.extend(fetched_rejected)
 
