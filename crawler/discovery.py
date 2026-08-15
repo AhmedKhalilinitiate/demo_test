@@ -25,33 +25,27 @@ def _source_domain(source):
 
 
 def _shopping(key,q,country,limit):
-    r=requests.post(
-        "https://google.serper.dev/shopping",
-        headers=HEADERS(key),json={"q":q,"gl":country,"num":limit},timeout=30,
-    )
-    r.raise_for_status()
-    return r.json().get("shopping",[])
+    r=requests.post("https://google.serper.dev/shopping",headers=HEADERS(key),json={"q":q,"gl":country,"num":limit},timeout=30)
+    r.raise_for_status();return r.json().get("shopping",[])
 
 
 def _organic(key,q,country,limit=5):
-    r=requests.post(
-        "https://google.serper.dev/search",
-        headers=HEADERS(key),json={"q":q,"gl":country,"num":limit},timeout=20,
-    )
-    r.raise_for_status()
-    return r.json().get("organic",[])
+    r=requests.post("https://google.serper.dev/search",headers=HEADERS(key),json={"q":q,"gl":country,"num":limit},timeout=20)
+    r.raise_for_status();return r.json().get("organic",[])
 
 
 def _resolve_direct(key,row,query,country):
-    """Resolve Google Shopping intermediary links to a verified merchant page."""
+    """Return (url, verified) for a Shopping result.
+
+    `verified=True` only when an indirect Google Shopping result was resolved to a
+    merchant page whose organic result title passes the strict product matcher.
+    """
     link=row.get("link") or ""
     if link and not _is_google(link):
-        return link
+        return link,False
 
-    domain=_source_domain(row.get("source"))
-    title=(row.get("title") or "").strip()
-    if not domain:
-        return link
+    domain=_source_domain(row.get("source"));title=(row.get("title") or "").strip()
+    if not domain:return link,False
 
     searches=[]
     if query:searches.append(f'site:{domain} "{query[:120]}"')
@@ -68,10 +62,10 @@ def _resolve_direct(key,row,query,country):
                 result=evaluate_match(query,candidate_title) if query else None
                 if result and result.accepted and result.score>best_score:
                     best=u;best_score=result.score
-                if result and result.accepted and result.score>=80:return u
+                if result and result.accepted and result.score>=80:return u,True
         except Exception:
             continue
-    return best or link
+    return (best,True) if best else (link,False)
 
 
 def discover(query,country="sa",limit=10):
@@ -87,11 +81,12 @@ def discover(query,country="sa",limit=10):
     rows=[]
     for i,x in enumerate(raw):
         original=x.get("link") or ""
-        link=_resolve_direct(key,x,query,country) if i<8 else original
+        if i<8:link,verified=_resolve_direct(key,x,query,country)
+        else:link,verified=original,False
         host=urlparse(link).netloc.lower()
         rows.append({
             "title":x.get("title"),"price":x.get("price"),"source":x.get("source"),"url":link,
             "shopping_url":original,"supported":any(d in host for d in SAUDI_DOMAINS),
-            "direct":bool(link and not _is_google(link)),
+            "direct":bool(link and not _is_google(link)),"verified_direct":verified,
         })
     return rows
