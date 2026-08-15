@@ -37,27 +37,32 @@ def _organic(key,q,country,limit=5):
 def _resolve_direct(key,row,query,country):
     """Return (url, verified) for a Shopping result.
 
-    `verified=True` only when an indirect Google Shopping result was resolved to a
-    merchant page whose organic result title passes the strict product matcher.
+    Direct merchant links are preserved. Google Shopping intermediary links are
+    resolved through strict organic-title matching. If Serper's source does not
+    expose a domain (common for smaller shops), a source-name search is used.
     """
     link=row.get("link") or ""
     if link and not _is_google(link):
         return link,False
 
-    domain=_source_domain(row.get("source"));title=(row.get("title") or "").strip()
-    if not domain:return link,False
-
+    source=(row.get("source") or "").strip()
+    domain=_source_domain(source);title=(row.get("title") or "").strip()
     searches=[]
-    if query:searches.append(f'site:{domain} "{query[:120]}"')
-    if title:searches.append(f'site:{domain} "{title[:120]}"')
-    if query and title:searches.append(f"site:{domain} {query[:90]} {title[:90]}")
+    if domain:
+        if query:searches.append(f'site:{domain} "{query[:120]}"')
+        if title:searches.append(f'site:{domain} "{title[:120]}"')
+        if query and title:searches.append(f"site:{domain} {query[:90]} {title[:90]}")
+    else:
+        if source and query:searches.append(f'"{source[:70]}" "{query[:120]}" Saudi Arabia')
+        if source and title:searches.append(f'"{source[:70]}" "{title[:120]}"')
 
     best=None;best_score=-1.0
     for search_q in searches:
         try:
             for item in _organic(key,search_q,country,5):
                 u=item.get("link") or "";host=urlparse(u).netloc.lower()
-                if not (host==domain or host.endswith("."+domain)):continue
+                if not u or _is_google(u):continue
+                if domain and not (host==domain or host.endswith("."+domain)):continue
                 candidate_title=item.get("title") or title
                 result=evaluate_match(query,candidate_title) if query else None
                 if result and result.accepted and result.score>best_score:
@@ -68,20 +73,44 @@ def _resolve_direct(key,row,query,country):
     return (best,True) if best else (link,False)
 
 
+def _row_key(x):
+    return (
+        str(x.get("source") or "").strip().lower(),
+        str(x.get("title") or "").strip().lower(),
+        str(x.get("price") or "").strip().lower(),
+        str(x.get("link") or "").split("#",1)[0],
+    )
+
+
 def discover(query,country="sa",limit=10):
     key=os.getenv("SERPER_API_KEY")
     if not key:raise RuntimeError("SERPER_API_KEY is required for discovery mode")
 
-    attempts=[f"{query} Saudi Arabia buy price",f"{query} Saudi Arabia",f"{query} KSA"]
-    raw=[]
+    # Merge several Shopping searches instead of stopping at the first result set.
+    # This intentionally broadens coverage so smaller/cheaper merchants are not
+    # hidden simply because Amazon/large retailers dominate the first query.
+    attempts=[
+        f"{query} Saudi Arabia buy price",
+        f'"{query}" Saudi Arabia',
+        f"{query} KSA price",
+    ]
+    raw=[];seen=set()
+    per_query=max(10,min(int(limit),18))
     for q in attempts:
-        raw=_shopping(key,q,country,limit)
-        if raw:break
+        try:batch=_shopping(key,q,country,per_query)
+        except Exception:continue
+        for x in batch:
+            k=_row_key(x)
+            if k in seen:continue
+            seen.add(k);raw.append(x)
+        if len(raw)>=36:break
 
     rows=[]
-    for i,x in enumerate(raw):
+    for i,x in enumerate(raw[:36]):
         original=x.get("link") or ""
-        if i<8:link,verified=_resolve_direct(key,x,query,country)
+        # Resolve more candidates than before, prioritising breadth while keeping
+        # organic-resolution API use bounded.
+        if i<12:link,verified=_resolve_direct(key,x,query,country)
         else:link,verified=original,False
         host=urlparse(link).netloc.lower()
         rows.append({
