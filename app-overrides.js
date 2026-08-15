@@ -1,14 +1,15 @@
-// Runtime UX hardening layered over app.js. Kept separate so trigger diagnostics
-// and offer confidence labels can evolve without destabilising the main dashboard.
+// Runtime UX hardening layered over app.js.
 
+window.lastInstantTriggerError='';
 triggerInstantCrawl = async function triggerInstantCrawlWithRetry(trackerId){
   const url=`${cfg.supabaseUrl.replace(/\/$/,'')}/functions/v1/trigger-price-check`;
   let lastErr;
+  window.lastInstantTriggerError='';
   for(let attempt=1;attempt<=3;attempt++){
     try{
       const r=await fetch(url,{method:'POST',headers:headers(),body:JSON.stringify({tracker_id:trackerId})});
       const text=await r.text();
-      if(r.ok){try{return JSON.parse(text)}catch{return {ok:true}}}
+      if(r.ok){window.lastInstantTriggerError='';try{return JSON.parse(text)}catch{return {ok:true}}}
       let detail=text;
       try{const j=JSON.parse(text);detail=j.detail||j.error||text}catch{}
       const hint=r.status===404?'Edge Function is not deployed.'
@@ -17,23 +18,12 @@ triggerInstantCrawl = async function triggerInstantCrawlWithRetry(trackerId){
         :r.status===502?'GitHub workflow dispatch was rejected; check the GitHub token and Actions permission.'
         :`HTTP ${r.status}`;
       lastErr=new Error(`${hint} ${String(detail||'').slice(0,220)}`.trim());
-      // Retry transient/server failures, not permanent auth/configuration failures.
       if(![429,500,502,503,504].includes(r.status))break;
     }catch(e){lastErr=e}
     if(attempt<3)await new Promise(res=>setTimeout(res,attempt*900));
   }
+  window.lastInstantTriggerError=String(lastErr?.message||lastErr||'Instant crawl trigger failed.');
   throw lastErr||new Error('Instant crawl trigger failed.');
-};
-
-const _baseAddTracker=addTracker;
-addTracker = async function addTrackerWithBetterTriggerMessage(){
-  // Keep the original workflow, but surface the actual trigger failure after it
-  // runs instead of hiding the reason behind a generic message.
-  const originalSetMsg=setMsg;
-  let captured='';
-  setMsg=function(t,e=false){captured=t;originalSetMsg(t,e)};
-  try{await _baseAddTracker()}
-  finally{setMsg=originalSetMsg}
 };
 
 // Replace the offer renderer so cheaper variant-ambiguous results are visible
@@ -51,14 +41,15 @@ offerTable = function offerTableWithConfidence(offers,cur){
   }).join('')}</div>`;
 };
 
-// Make the generic error useful even when the original addTracker catches it.
+// The original addTracker intentionally keeps scheduled tracking alive when the
+// instant dispatch fails; add the concrete server-side cause to that message.
 const _oldSetMsg=setMsg;
 setMsg=function(t,e=false){
   if(e&&t==='Tracker saved, but the instant crawl trigger failed. Scheduled tracking will still continue.'){
-    t+=' The most common cause is an undeployed trigger-price-check Edge Function or missing GITHUB_WORKFLOW_TOKEN secret.';
+    const detail=window.lastInstantTriggerError;
+    t+=detail?` ${detail}`:' Check the trigger-price-check Edge Function deployment and its GITHUB_WORKFLOW_TOKEN secret.';
   }
   _oldSetMsg(t,e);
 };
 
-// Re-render once with the confidence-aware offer table.
 render();
