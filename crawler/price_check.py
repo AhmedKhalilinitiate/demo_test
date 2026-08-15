@@ -37,8 +37,11 @@ def _serper_quotes(rows):
     return quotes
 
 def _offer_rows(tracker_id,quotes,checked_at):
+    ordered=sorted(quotes,key=lambda x:x.delivered_price)
+    direct=[q for q in ordered if _is_direct_merchant_url(q.url)]
+    pool=direct or ordered
     seen=set(); out=[]
-    for q in sorted(quotes,key=lambda x:x.delivered_price):
+    for q in pool:
         key=(q.retailer,q.url,round(float(q.delivered_price),2))
         if key in seen: continue
         seen.add(key)
