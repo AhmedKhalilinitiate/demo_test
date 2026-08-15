@@ -9,12 +9,22 @@ class SupabaseStore:
             raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
         self.headers={"apikey":self.key,"Authorization":f"Bearer {self.key}","Content-Type":"application/json","Prefer":"return=representation"}
     def _endpoint(self,table): return f"{self.url}/rest/v1/{table}"
-    def trackers(self):
-        r=requests.get(self._endpoint("trackers"),headers=self.headers,params={"active":"eq.true","select":"*"},timeout=30); r.raise_for_status(); return r.json()
+    def trackers(self,tracker_id=None):
+        params={"active":"eq.true","select":"*"}
+        if tracker_id: params["id"]=f"eq.{tracker_id}"
+        r=requests.get(self._endpoint("trackers"),headers=self.headers,params=params,timeout=30); r.raise_for_status(); return r.json()
     def observations(self,tracker_id,limit=30):
         r=requests.get(self._endpoint("observations"),headers=self.headers,params={"tracker_id":f"eq.{tracker_id}","select":"*","order":"checked_at.desc","limit":str(limit)},timeout=30); r.raise_for_status(); return r.json()
     def insert_observation(self,row):
         r=requests.post(self._endpoint("observations"),headers=self.headers,json=row,timeout=30); r.raise_for_status(); data=r.json(); return data[0] if data else row
+    def replace_offers(self,tracker_id,rows):
+        d=requests.delete(self._endpoint("offers"),headers=self.headers,params={"tracker_id":f"eq.{tracker_id}"},timeout=30)
+        if d.status_code==404: return False
+        d.raise_for_status()
+        if not rows: return True
+        r=requests.post(self._endpoint("offers"),headers=self.headers,json=rows,timeout=30)
+        if r.status_code==404: return False
+        r.raise_for_status(); return True
     def update_sources(self,tracker_id,urls):
         urls=[u for u in urls if u]
         payload={"urls":urls,"url":urls[0] if urls else None,"last_status":"discovered" if urls else "needs_url","last_error":None if urls else "No product URL configured"}
