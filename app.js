@@ -2,7 +2,7 @@ const cfg=window.PRICE_INTEL_CONFIG||{},$=id=>document.getElementById(id);
 const configured=()=>cfg.supabaseUrl&&!cfg.supabaseUrl.includes('REPLACE_')&&cfg.supabaseAnonKey&&!cfg.supabaseAnonKey.includes('REPLACE_');
 const headers=()=>({apikey:cfg.supabaseAnonKey,Authorization:`Bearer ${cfg.supabaseAnonKey}`,'Content-Type':'application/json'});
 const api=(t,q='')=>`${cfg.supabaseUrl.replace(/\/$/,'')}/rest/v1/${t}${q}`;
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
 const money=n=>`SAR ${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
 const fmtTime=v=>v?new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(v)):'—';
 const pct=n=>`${Number(n||0).toFixed(1)}%`;
@@ -14,7 +14,27 @@ const isStale=v=>v&&(Date.now()-new Date(v).getTime())>12*60*60*1000;
 async function getTrackers(){const r=await fetch(api('trackers','?active=eq.true&select=*&order=created_at.desc'),{headers:headers()});if(!r.ok)throw new Error(await r.text());return r.json()}
 async function getObs(){const r=await fetch(api('observations','?select=*&order=checked_at.desc&limit=1000'),{headers:headers()});if(!r.ok)throw new Error(await r.text());return r.json()}
 async function getOffers(){const r=await fetch(api('offers','?select=*&order=delivered_price.asc&limit=1000'),{headers:headers()});if(r.status===404)return[];if(!r.ok){const text=await r.text();if(text.includes('offers'))return[];throw new Error(text)}return r.json()}
-async function triggerInstantCrawl(trackerId){const url=`${cfg.supabaseUrl.replace(/\/$/,'')}/functions/v1/trigger-price-check`;const r=await fetch(url,{method:'POST',headers:headers(),body:JSON.stringify({tracker_id:trackerId})});if(!r.ok)throw new Error(await r.text());return r.json()}
+async function triggerInstantCrawl(trackerId){
+  const url=`${cfg.supabaseUrl.replace(/\/$/,'')}/functions/v1/trigger-price-check`;
+  let lastError;
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      const r=await fetch(url,{method:'POST',headers:headers(),body:JSON.stringify({tracker_id:trackerId})});
+      const text=await r.text();
+      if(r.ok){try{return JSON.parse(text)}catch{return{ok:true}}}
+      let detail=text;try{const j=JSON.parse(text);detail=j.detail||j.error||text}catch{}
+      const hint=r.status===404?'Edge Function is not deployed.'
+        :[401,403].includes(r.status)?'Edge Function authentication rejected the request.'
+        :r.status===500?'Edge Function server configuration failed (usually a missing secret).'
+        :r.status===502?'GitHub rejected the workflow dispatch (usually token/Actions permission).'
+        :`HTTP ${r.status}.`;
+      lastError=new Error(`${hint} ${String(detail||'').slice(0,300)}`.trim());
+      if(![429,500,502,503,504].includes(r.status))break;
+    }catch(e){lastError=e}
+    if(attempt<3)await new Promise(res=>setTimeout(res,attempt*1000));
+  }
+  throw lastError||new Error('Instant crawl trigger failed.');
+}
 function setMsg(t,e=false){$('formMsg').textContent=t;$('formMsg').className=`msg ${e?'error':'ok'}`}
 function pollAfterCreate(){[6000,12000,22000,36000].forEach(ms=>setTimeout(render,ms))}
 
@@ -38,7 +58,7 @@ async function addTracker(){
     $('itemName').value='';$('itemUrl').value='';$('targetPrice').value='';
     if(tracker?.id){
       try{await triggerInstantCrawl(tracker.id);setMsg('Tracker saved. First crawl queued automatically; this card will refresh as results arrive.');pollAfterCreate()}
-      catch(e){setMsg('Tracker saved, but the instant crawl trigger failed. Scheduled tracking will still continue.',true)}
+      catch(e){setMsg(`Tracker saved, but the instant crawl trigger failed: ${e.message||e} Scheduled tracking will still continue.`,true)}
     }else setMsg('Tracker saved.');
     await render();
   }catch(e){setMsg(`Could not start tracking: ${e.message||e}`,true)}finally{btn.disabled=false}
