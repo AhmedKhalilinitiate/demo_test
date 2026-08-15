@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 from crawler.adapters import fetch_quote, ProductQuote
 from crawler.backend import SupabaseStore
 from crawler.discovery import discover
-from crawler.product_match import evaluate_match
+from crawler.product_match import evaluate_match, tokens, WIDE_MARKERS, CRITICAL_VARIANTS
 
 
 def baseline(prices,anchor=None):
@@ -46,15 +46,33 @@ def _url_key(url):
     except Exception:return str(url or "").strip().lower()
 
 
+def _relaxed_variant_match(query,title,strict_reason):
+    """Allow a result to be shown as a *possible* offer, never as the tracked price.
+
+    Only variant-related strict failures may be relaxed. Model-number/model-code
+    mismatches remain excluded so a Kayano 31 can never appear under Kayano 32.
+    """
+    if not (strict_reason.startswith("missing requested variant") or strict_reason=="missing requested wide-fit variant"):
+        return False
+    qt=tokens(query)
+    relaxed=[x for x in qt if x not in WIDE_MARKERS and x not in CRITICAL_VARIANTS and x!="extra"]
+    if not relaxed:return False
+    return evaluate_match(" ".join(relaxed),title).accepted
+
+
 def _serper_quotes(rows,query):
-    quotes=[];rejected=[]
+    quotes=[];rejected=[];possible=[]
     for x in rows:
         price=_price_number(x.get("price"))
         if not price:continue
         source=(x.get("source") or "Google Shopping").strip();title=x.get("title") or source;match=evaluate_match(query,title);verified=bool(x.get("verified_direct"))
-        if not match.accepted and not verified:rejected.append((title,match.reason));continue
-        quotes.append(ProductQuote(retailer=source,title=title,price=price,currency="SAR",in_stock=True,url=x.get("url") or "",source="serper-shopping-verified" if verified and not match.accepted else "serper-shopping"))
-    return quotes,rejected
+        url=x.get("url") or ""
+        if not match.accepted and not verified:
+            if _relaxed_variant_match(query,title,match.reason):
+                possible.append(ProductQuote(retailer=source,title=title,price=price,currency="SAR",in_stock=True,url=url,source="serper-shopping-possible"))
+            rejected.append((title,match.reason));continue
+        quotes.append(ProductQuote(retailer=source,title=title,price=price,currency="SAR",in_stock=True,url=url,source="serper-shopping-verified" if verified and not match.accepted else "serper-shopping"))
+    return quotes,rejected,possible
 
 
 def _filter_fetched_quotes(query,quotes,trusted_urls=None):
@@ -78,10 +96,12 @@ def _drop_price_outliers(quotes):
 def _offer_rows(tracker_id,quotes,checked_at):
     ordered=sorted(quotes,key=lambda x:x.delivered_price);seen=set();out=[]
     for q in ordered:
-        direct=_is_direct_merchant_url(q.url);key=(q.retailer.lower().strip(),(q.title or "").lower().strip(),round(float(q.delivered_price),2))
+        direct=_is_direct_merchant_url(q.url);key=(q.retailer.lower().strip(),(q.title or "").lower().strip(),round(float(q.delivered_price),2),q.source)
         if key in seen:continue
         seen.add(key);out.append({"tracker_id":tracker_id,"retailer":q.retailer,"title":q.title,"url":q.url if direct else "","price":q.price,"shipping":q.shipping,"delivered_price":q.delivered_price,"currency":q.currency or "SAR","in_stock":q.in_stock,"source":q.source,"checked_at":checked_at})
-    out.sort(key=lambda r:(0 if r["url"] else 1,float(r["delivered_price"])));return out[:20]
+    # Lowest price first. Frontend labels possible matches so the user can inspect
+    # cheap leads without them silently becoming the official tracked price.
+    out.sort(key=lambda r:float(r["delivered_price"]));return out[:24]
 
 
 def _should_alert(is_deal,previous,current_price):
@@ -123,22 +143,24 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
         tid=t["id"];name=(t.get("name") or "").strip();cache_key=re.sub(r"\s+"," ",name.lower()).strip()
         try:
             known_urls=t.get("urls") or ([t["url"]] if t.get("url") else [])
-            discovery_rows=[];discovery_quotes=[];rejected=[];discovery_error=None;cache_hit=False
+            discovery_rows=[];discovery_quotes=[];possible_quotes=[];rejected=[];discovery_error=None;cache_hit=False
             if cache_key in discovery_cache:
                 discovery_rows,discovery_error=discovery_cache[cache_key];cache_hit=True
             else:
                 try:discovery_rows=discoverer(name,country="sa",limit=16)
                 except Exception as exc:discovery_error=str(exc)[:180]
                 discovery_cache[cache_key]=(discovery_rows,discovery_error)
-            discovery_quotes,rejected=_serper_quotes(discovery_rows,name)
+            discovery_quotes,rejected,possible_quotes=_serper_quotes(discovery_rows,name)
 
             trusted_urls=[x.get("url") for x in discovery_rows if x.get("verified_direct") and x.get("url") and _is_direct_merchant_url(x.get("url"))]
             supported_urls=[x.get("url") for x in discovery_rows if x.get("supported") and x.get("url") and _is_direct_merchant_url(x.get("url"))]
             discovered_urls=[x.get("url") for x in discovery_rows if x.get("url") and _is_direct_merchant_url(x.get("url"))]
-            urls=_unique_direct_urls(trusted_urls+list(known_urls)+supported_urls+discovered_urls)[:8]
-            print(f"tracker={name} discovery_results={len(discovery_rows)} cache_hit={cache_hit} direct_urls={len(urls)} trusted_resolved={len(trusted_urls)} relevant_serper={len(discovery_quotes)} rejected_serper={len(rejected)}"+(f" discovery_error={discovery_error}" if discovery_error else ""))
+            urls=_unique_direct_urls(trusted_urls+list(known_urls)+supported_urls+discovered_urls)[:10]
+            print(f"tracker={name} discovery_results={len(discovery_rows)} cache_hit={cache_hit} direct_urls={len(urls)} trusted_resolved={len(trusted_urls)} relevant_serper={len(discovery_quotes)} possible_serper={len(possible_quotes)} rejected_serper={len(rejected)}"+(f" discovery_error={discovery_error}" if discovery_error else ""))
 
             if not urls and not discovery_quotes:
+                # Possible matches are still stored below only when at least one safe
+                # decision quote exists. A tracker with no safe match remains no_match.
                 detail=rejected[0][1] if rejected else (discovery_error or "no shopping results");store.mark_checked(tid,"no_match",f"No sufficiently relevant product offers found ({detail})");continue
 
             previous=store.observations(tid,30);prior=[float(x["delivered_price"]) for x in reversed(previous) if x.get("delivered_price") is not None]
@@ -152,14 +174,14 @@ def run(store=None,quote_fetcher=fetch_quote,discoverer=discover):
 
             quotes,outlier_count=_drop_price_outliers(quotes);now=datetime.now(timezone.utc).isoformat()
             try:
-                saved=store.replace_offers(tid,_offer_rows(tid,quotes,now))
+                saved=store.replace_offers(tid,_offer_rows(tid,quotes+possible_quotes,now))
                 if not saved:print("offers_table=missing; apply supabase/offers_migration.sql")
             except Exception as exc:print(f"offers_store_warning={str(exc)[:180]}")
 
             quote=min(quotes,key=lambda q:q.delivered_price);base=baseline(prior,quote.delivered_price) or quote.delivered_price;is_deal,discount=deal_status(quote.delivered_price,base,t.get("threshold_pct",15),t.get("target_price"))
             row={"tracker_id":tid,"retailer":quote.retailer,"title":quote.title,"url":quote.url,"price":quote.price,"shipping":quote.shipping,"delivered_price":quote.delivered_price,"currency":quote.currency or t.get("currency","SAR"),"in_stock":quote.in_stock,"baseline":base,"discount_pct":discount,"is_deal":is_deal,"checked_at":now,"source":quote.source}
             store.insert_observation(row);store.mark_checked(tid,"ok",None);checked+=1
-            print(f"tracker={name} retailer={quote.retailer} price={quote.delivered_price} source={quote.source} relevant_offers={len(quotes)} rejected={len(rejected)} outliers_removed={outlier_count} status=ok")
+            print(f"tracker={name} retailer={quote.retailer} price={quote.delivered_price} source={quote.source} relevant_offers={len(quotes)} possible_offers={len(possible_quotes)} rejected={len(rejected)} outliers_removed={outlier_count} status=ok")
             if _should_alert(is_deal,previous,quote.delivered_price):alerts.append(row)
         except Exception as e:
             print(f"tracker={name} status=error error={str(e)[:300]}");store.mark_checked(tid,"error",str(e)[:500])
