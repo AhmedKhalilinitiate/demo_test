@@ -71,7 +71,24 @@ def test_polluted_old_history_does_not_skew_new_baseline():
 
 def test_verified_merchant_resolution_can_confirm_variant_omitted_by_shopping_title():
     rows=[{'title':'ASICS GEL-KAYANO 32 Running Shoe','price':'SAR 610','source':'Amazon','url':'https://amazon.sa/example','verified_direct':True}]
-    quotes,rejected=_serper_quotes(rows,'ASICS GEL KAYANO 32 wide')
+    quotes,rejected,possible=_serper_quotes(rows,'ASICS GEL KAYANO 32 wide')
     assert len(quotes)==1
     assert quotes[0].source=='serper-shopping-verified'
     assert rejected==[]
+    assert possible==[]
+
+
+def test_variant_ambiguous_cheaper_offer_is_visible_but_not_verified():
+    rows=[{'title':'ASICS GEL-KAYANO 32 Running Shoe','price':'SAR 259','source':'SportsLab','url':'https://sportslab.example/kayano-32','verified_direct':False}]
+    quotes,rejected,possible=_serper_quotes(rows,'ASICS GEL KAYANO 32 wide')
+    assert quotes==[]
+    assert len(possible)==1
+    assert possible[0].price==259
+    assert possible[0].source=='serper-shopping-possible'
+    assert rejected
+
+
+def test_wrong_generation_never_returns_as_possible_match():
+    rows=[{'title':'ASICS GEL-KAYANO 31 Wide','price':'SAR 199','source':'Shop','url':'https://shop.example/31','verified_direct':False}]
+    quotes,rejected,possible=_serper_quotes(rows,'ASICS GEL KAYANO 32 wide')
+    assert quotes==[] and possible==[] and rejected
