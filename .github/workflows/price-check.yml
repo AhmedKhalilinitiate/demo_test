@@ -31,7 +31,7 @@ jobs:
       - name: Run live crawler
         run: python -m crawler.price_check
         env:
-          TRACKER_ID: ${{ github.event.inputs.tracker_id }}
+          TRACKER_ID: ${{ inputs.tracker_id || github.event.inputs.tracker_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
